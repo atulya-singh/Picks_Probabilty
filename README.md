@@ -108,6 +108,37 @@ This is the **favorite-longshot bias** — a well-documented inefficiency in spo
 
 In practical terms: if the market says a team has an 82% chance to win, the actual historical win rate for similarly-priced teams is closer to 77–79%. That gap is consistent and systematic — not noise.
 
+### Layer 2 — Independent Model
+
+A win-probability model was trained on signals that are **independent of the market**: the Elo rating gap, the rolling four-factor differentials (10- and 20-game windows), and schedule/rest features. Two learners — logistic regression and gradient boosting — were averaged into an ensemble.
+
+**Split:** trained on 2013-14 → 2020-21, held out on 2021-22 → 2022-23 (the last two seasons that still carry moneyline odds). The model never sees the holdout.
+
+| Model | Brier | Accuracy | AUC |
+|-------|-------|----------|-----|
+| Logistic regression | 0.2244 | 64.0% | 0.674 |
+| Gradient boosting | 0.2250 | 64.0% | 0.672 |
+| **Ensemble** | **0.2244** | **64.1%** | 0.674 |
+| Elo baseline | 0.2283 | 63.7% | 0.674 |
+| Market (de-vigged) | **0.2143** | **66.4%** | **0.708** |
+
+The honest takeaway: the model **beats the Elo baseline** but the **market still beats the model** on aggregate accuracy. That is expected — the market is hard to beat head-to-head. The value isn't in winning every game; it's in finding the *selective spots* where the model and market disagree and the model is right.
+
+### Edge Detection & Backtesting
+
+Bets are placed only where the model implies positive expected value at the real moneyline price. Flat $1 stakes, settled at the actual American odds, on the 1,894 held-out games with odds. Break-even after the bookmaker's hold sits around **−4.5% ROI**.
+
+| Strategy | Bets | Win rate | ROI |
+|----------|------|----------|-----|
+| Fade heavy home favorites (market 75–90%) | 335 | 22.7% | **+10.8%** |
+| Model EV > 0.10 | 945 | 34.2% | −0.8% |
+| Always bet home (baseline) | 1,894 | 56.4% | −3.3% |
+| Always bet favorite (baseline) | 1,894 | 66.4% | −4.0% |
+
+The standout is the **favorite-longshot rule** — turning the Layer 1 bias finding into a bet (fade heavily-priced home favorites) returns **+10.8% over 335 bets**, clearly above the vig and above the naive baselines. The EV-threshold strategies hover around break-even: competitive with the market but not a reliable edge on their own.
+
+> **Caveat:** the positive-ROI window is a single ~1,900-game holdout and the favorite-longshot rule fires on only 335 bets. It's a promising, theory-consistent signal — not yet a validated betting system. Larger out-of-sample odds data is the next requirement.
+
 ---
 
 ## Current Status
@@ -117,9 +148,12 @@ In practical terms: if the market says a team has an 82% chance to win, the actu
 - [x] Four-factor rolling feature engineering (10 and 20 game windows)
 - [x] Market (Layer 1) calibration and bias analysis
 - [x] Full dataset joined and ready for modeling
-- [ ] Layer 2 model training (logistic regression / gradient boosting)
-- [ ] Edge detection — where model probabilities diverge from market
-- [ ] Backtesting framework
+- [x] Layer 2 model training (logistic regression + gradient boosting ensemble)
+- [x] Edge detection — model vs market divergence, bucketed by edge size
+- [x] Backtesting framework — flat-stake ROI at real moneyline prices
+- [ ] Expand odds coverage to 2023-25 for a larger out-of-sample backtest
+- [ ] Probability calibration (isotonic / Platt) on the model outputs
+- [ ] Bankroll management (Kelly staking) layered on top of edge detection
 
 ---
 
@@ -131,8 +165,10 @@ In practical terms: if the market says a team has an 82% chance to win, the actu
 ├── build_features.py       # Four-factor rolling features
 ├── layer1_calibration.py   # De-vig odds, measure market accuracy
 ├── join_model_data.py      # Merge all sources into model dataset
+├── layer2_model.py         # Train model, compare to Elo + market baselines
+├── backtest.py             # Edge detection + flat-stake ROI backtest
 ├── fetch_odds.py           # Live + historical odds from The Odds API
 └── data/
     ├── raw/                # Source CSVs and JSON odds snapshots
-    └── processed/          # Elo output, features, joined model data
+    └── processed/          # Elo output, features, joined data, predictions
 ```
