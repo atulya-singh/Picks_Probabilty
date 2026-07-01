@@ -1,16 +1,16 @@
 # Picks_Probability
 
-A multi-layer NBA win probability model built to identify edges against the betting market.
+I wanted to know if I could beat the NBA betting market with a model built from public data. The short answer turned out to be no. The longer answer is that I spent most of this project making sure I proved that properly, instead of talking myself into a good-looking backtest. This is the writeup.
 
 ---
 
-## Project Goal
+## The idea
 
-The core idea is simple: the betting market is generally efficient, but not perfect. This project builds a pipeline to:
+Betting markets are efficient but not perfect, so my plan was:
 
-1. Establish the market (Vegas) as a baseline probability estimate
-2. Build independent features from historical NBA data
-3. Train a model whose probabilities diverge from the market in meaningful ways — those divergences are potential edges
+1. Figure out what the market already knows and treat that as the number to beat.
+2. Build my own features from historical NBA data that don't depend on the odds.
+3. Train a model and look at where it disagrees with the market. If there's money to be made, it's in those disagreements.
 
 ---
 
@@ -30,33 +30,33 @@ Historical odds data  ──▶  De-vigged market probabilities (Layer 1 baselin
 
 ---
 
-## Data Sources
+## Data
 
 | Source | Contents | Seasons |
 |--------|----------|---------|
 | NBA official API | Team boxscores — FGM, FGA, 3PM, FTA, OREB, DREB, TOV, PTS | 2013–14 → 2024–25 |
-| Kaggle historical dataset | Game results + **moneyline** odds | 2008 → **Jan 2023** (cliffs) |
-| Kaggle historical dataset | Game results + **point spread** (used as the market baseline where moneylines end) | 2008 → 2026 |
+| Kaggle historical dataset | Game results + moneyline odds | 2008 → Jan 2023 (then stops) |
+| Kaggle historical dataset | Game results + point spread (my market baseline once the moneylines run out) | 2008 → 2026 |
 
 ---
 
-## Methodology
+## How I built it
 
-### Elo Ratings
+### Elo ratings
 
-Each team is assigned a numerical strength rating that updates after every game. The system follows FiveThirtyEight's approach:
+I gave every team an Elo rating that updates after each game, following FiveThirtyEight's setup:
 
-- Starting rating: **1505** for all teams
-- Home court advantage: **+100 Elo points** on the rating difference
-- Win probability is derived from the rating gap using a logistic curve
-- K-factor (how fast ratings move) is scaled by margin of victory — blowing a team out moves ratings more than a one-point win
-- At the start of every season, ratings **regress 25% toward the mean** to account for roster turnover
+- Everyone starts at 1505.
+- Home court is worth +100 Elo in the matchup.
+- Win probability comes off the rating gap through a logistic curve.
+- The K-factor (how fast ratings move) scales with margin of victory, so a blowout moves ratings more than a one-point win.
+- At the start of each season I regress ratings 25% back toward the mean to account for roster turnover.
 
-**Elo model accuracy (2014–2024): ~66%** — a reasonable baseline for a single-signal rating system.
+On its own, Elo calls about 66% of games correctly (2014–2024). That's a reasonable single-number baseline to build on.
 
-### Four Factors Feature Engineering
+### Four factors
 
-Dean Oliver's "four factors" framework explains most of what separates winning from losing teams:
+For the actual features I leaned on Dean Oliver's "four factors," which cover most of what separates winning teams from losing ones:
 
 | Factor | Metric | What it measures |
 |--------|--------|-----------------|
@@ -65,48 +65,37 @@ Dean Oliver's "four factors" framework explains most of what separates winning f
 | Second chances | Offensive rebound % | Share of own missed shots recovered |
 | Free throws | Free throw rate | Free throw attempts relative to field goal attempts |
 
-All four factors are computed for both offense and defense (how well you force the opponent's four factors to suffer). Each stat is then turned into a **rolling average over the last 10 and 20 games**.
+I compute all four for both offense and defense (how well a team drags down the opponent's four factors) and turn each into a rolling average over the last 10 and 20 games.
 
-**No-leakage guarantee:** all rolling features use a one-game lag (`shift(1)`) — when predicting game N, only games 0 through N-1 are used. The model never sees the game it's predicting.
+The one thing I was strict about was leakage. Every rolling feature is lagged a game (`shift(1)`), so when I predict game N the features only use games 0 through N-1. The model never gets to peek at the game it's scoring. I also throw in days of rest, a back-to-back flag, and how far into the season the game is.
 
-Additional features: days of rest before the game, back-to-back flag, games played into the season.
+### Layer 1 — reading the market first
 
-### Layer 1 — Market Calibration
-
-Before building a model, the Vegas odds were analyzed as a standalone predictor.
-
-American moneylines (e.g. -220, +185) are converted to implied probabilities. But both sides always sum to more than 100% — that's the **vig** (the bookmaker's profit margin). The Power method strips out the vig by finding an exponent `k` such that:
+Before training anything I looked at the Vegas odds on their own. Moneylines like -220 or +185 convert to implied probabilities, but the two sides always add up to more than 100% — that gap is the vig, the book's margin. I strip it out with the power method, solving for the exponent `k` where:
 
 ```
 p_away^k + p_home^k = 1.0
 ```
 
-This produces "true" fair probabilities for each side. These were then evaluated against 11,413 regular season games from 2014–2024.
+That gives me a fair probability for each side. I checked those against 11,413 regular season games from 2014–2024.
 
 ---
 
-## Key Findings
+## What I found
 
-### Market accuracy is strong, but not perfect
+### The market is good
 
-| Metric | Value |
-|--------|-------|
-| Brier Score (de-vigged market vs. actual outcomes) | **0.2063** |
-| Games analyzed | 11,413 regular season games (2014–2024) |
+The de-vigged market scores a Brier of **0.2063** over those 11,413 games. Vegas is genuinely hard to beat, and that's the number I was trying to top.
 
-A Brier Score of 0.2063 is competitive — Vegas is genuinely good at this. The goal is to beat it.
+### Favorite-longshot bias
 
-### Favorite-Longshot Bias (a calibration pattern, not a bet)
+The first thing that jumped out was that heavy favorites are slightly overpriced: teams the market puts at 75–90% win a few points less often than that. This is the textbook favorite-longshot bias, and my first instinct was to bet it by fading heavy favorites.
 
-In the de-vigged **moneyline** probabilities, heavy favorites are mildly overpriced: teams the market prices at 75–90% win a few points less often than implied. This is the textbook **favorite-longshot bias**. It shows up as a calibration wobble in the market curve.
+An early version of this project did exactly that and showed **+10.8% ROI**. I was pretty excited about it for about a day. The significance testing further down is why I stopped being excited. The bias is real, but it's a tiny calibration quirk, not something I can actually bet.
 
-The tempting move is to bet it — fade heavy favorites. An earlier version of this project did exactly that and reported **+10.8% ROI**. The significance testing below shows why that number should not be trusted. The bias is a real (small) descriptive pattern; it is **not** a demonstrated edge.
+### My model (Layer 2)
 
-### Layer 2 — Independent Model
-
-A win-probability model was trained on signals that are **independent of the market**: the Elo rating gap, the rolling four-factor differentials (10- and 20-game windows), and schedule/rest features. Two learners — logistic regression and gradient boosting — were averaged into an ensemble.
-
-**Split:** trained on 2013-14 → 2020-21, held out on 2021-22 → 2024-25. Because the point spread reaches every season (see below), the out-of-sample window is **~4,900 games** — all strictly post-training, so nothing the model sees leaks into evaluation.
+Then I trained a model on signals that have nothing to do with the odds: the Elo gap, the rolling four-factor differences at both windows, and the rest/schedule stuff. It's a logistic regression and a gradient boosting model averaged together. I trained on 2013-14 → 2020-21 and held out 2021-22 → 2024-25 — everything in the test set comes after the training window, so nothing leaks. Thanks to the spread data (more on that below) the held-out set is about 4,900 games.
 
 | Model | Brier | Accuracy | AUC |
 |-------|-------|----------|-----|
@@ -117,13 +106,13 @@ A win-probability model was trained on signals that are **independent of the mar
 | Market (spread-implied) | **0.2057** | **67.9%** | **0.736** |
 | Market (de-vigged moneyline)¹ | 0.2143 | 66.4% | 0.708 |
 
-¹ Moneyline row evaluated on the 1,894 test games that still carry moneylines.
+¹ The moneyline row only covers the 1,894 test games that still have moneylines.
 
-The honest takeaway: the model **beats the Elo baseline** and is a **well-calibrated standalone win-probability estimate** — but the **market beats the model**, and the sharper spread-implied line beats it by more. Beating an efficient market head-to-head is the hardest possible target; the real question is whether the model contains information the market does not.
+So my model beats Elo and is reasonably well calibrated, but the market still beats it, and the spread-implied line beats it by more. I didn't really expect to win head-to-head against the market. What I actually wanted to know was whether my model knew anything the market didn't.
 
-### Significance Testing — the +10.8% does not survive
+### Checking whether the +10.8% was real
 
-Point estimates say nothing about whether a result is an edge or a lucky sample. Each strategy's per-bet returns were bootstrapped (10,000 resamples) into a 95% confidence interval on ROI.
+A single ROI number can't tell you if you got lucky, so I bootstrapped each strategy — resampling its per-bet results 10,000 times to get a confidence interval on the ROI.
 
 | Strategy | Bets | ROI | 95% CI | P(ROI > 0) | Verdict |
 |----------|------|-----|--------|-----------|---------|
@@ -131,13 +120,13 @@ Point estimates say nothing about whether a result is an edge or a lucky sample.
 | Model EV > 0.10 | 945 | −0.8% | [−11.0%, +9.6%] | 0.56 | not significant |
 | Always bet favorite (baseline) | 1,894 | −4.0% | [−7.3%, −0.8%] | 0.99 | not significant |
 
-The favorite-longshot rule's confidence interval spans **[−11.3%, +34.0%]** — there is a **17% chance** a true zero-edge strategy scores this well or better on 335 bets. High-variance underdog payouts make 335 bets far too few to distinguish signal from luck. The headline finding was noise.
+That fade-favorites edge has a 95% interval of **[−11.3%, +34.0%]**. There's a 17% chance you'd see a result that good from a strategy with no edge at all. 335 bets on volatile underdog payouts is just not enough to tell signal from luck, and the headline number was luck.
 
-### The Spread Pivot & Against-the-Spread Backtest
+### Getting more data — the spread pivot
 
-The moneyline data cliffs at January 2023, capping the moneyline backtest at ~1,894 games. But the **point spread is populated for every game through 2026**, and it maps cleanly to win probability — so it becomes the market baseline that reaches the missing seasons. Joining it onto the model dataset matched **100%** of games and roughly **tripled** the out-of-sample universe.
+My real problem was sample size, and the reason I only had 1,894 games was that the moneyline data dries up in January 2023. But the point spread is there for every game through 2026, and the spread maps cleanly onto a win probability. So I switched my market baseline over to the spread, which tripled the out-of-sample set to about 4,900 games. The join matched 100% of my games.
 
-Against-the-spread bets are then settled at the standard **−110** price over the full 2021–25 window (~4,900 games):
+With that, I ran an against-the-spread backtest, settling every bet at the standard −110 price:
 
 | Strategy | Bets | ROI | 95% CI | Verdict |
 |----------|------|-----|--------|---------|
@@ -146,58 +135,59 @@ Against-the-spread bets are then settled at the standard **−110** price over t
 | Always favorite ATS (baseline) | 4,913 | −4.5% | [−7.2%, −1.9%] | on the vig line |
 | Always home ATS (baseline) | 4,913 | −5.5% | [−8.1%, −2.8%] | on the vig line |
 
-The naive baselines landing **exactly on the −4.5% vig line** confirm the settlement is correct. Against that honest benchmark, nothing clears the hold — and the model actually gets *worse* the more selective it becomes, meaning the spots where it most disagrees with the spread are spots where **the spread is right**.
+I ran the naive baselines as a sanity check first: betting every home team or every favorite lands right on the −4.5% vig line, which tells me my settlement math is correct. And against that, nothing beats the vig. The part I found interesting is that my model actually gets *worse* the pickier it gets — the games where it most disagrees with the spread are the ones where the spread is right and I'm wrong.
 
-### Closing Line Value — the market encompasses the model
+### Closing line value
 
-CLV asks a single question: does the model hold information the closing line does not? If not, the close cannot be beaten. Two tests, both on the ~4,900-game out-of-sample set:
+This felt like the real test to me. The question is just: does my model know anything the closing line doesn't? If it doesn't, I can't beat the close, and that's the end of it. I checked two ways.
 
-**1. Line accuracy** — which implied line better forecasts the actual game margin?
+First, which line predicts the actual game margin better:
 
 | Forecast | MAE | RMSE |
 |----------|-----|------|
 | **Closing spread** | **10.35** | **13.30** |
 | Model line | 10.83 | 13.83 |
 
-**2. Forecast-encompassing regression** — regress outcomes on both forecasts (as standardized information weights):
+The closing spread wins. Then I regressed the outcome on both forecasts at once, to see if my model gets any weight once the closing line is in the picture:
 
 | Forecast | Coefficient | 95% CI | Verdict |
 |----------|------------|--------|---------|
 | **Closing line** | **+1.045** | [+0.92, +1.18] | adds info |
 | Model | −0.105 | **[−0.24, +0.02]** | no added info |
 
-The closing line is the sharper forecaster, and once it is known the model's probability adds **zero** predictive information (its coefficient is statistically indistinguishable from zero). The market **encompasses** the model: no CLV is achievable.
+It gets basically nothing — the model's coefficient sits at zero (and if anything, slightly negative). The closing line already contains everything my model knows, and then some.
 
-### Conclusion
+### So did it work?
 
-Three independent lines of evidence — significance-tested ROI, line-accuracy comparison, and the encompassing regression — converge on one result:
+No, and by this point I'm confident about that. Three separate checks — the bootstrapped ROI, the line-accuracy comparison, and the encompassing regression — all land in the same place: the NBA sides market is efficient for the signals I have. There's no edge I can bet and no closing-line value.
 
-> **The NBA sides market (moneyline and spread) is efficient with respect to these signals. There is no statistically supported edge, and no closing-line value is achievable.**
+I'm fine calling that a result. My model is a solid win-probability estimator — it beats Elo and it's calibrated — it just isn't smarter than a market that people sharpen for a living. I'd much rather know that for sure than ship a backtest I don't actually trust.
 
-This is a deliberately rigorous **negative result**. The model is a competent, well-calibrated win-probability estimator that beats Elo — it simply is not better than an efficient market, which is the expected outcome for a retail-data model. Establishing that *with statistical confidence*, rather than chasing an overfit backtest, is the point.
+### Where I'd go next
+
+The sides market is the hardest one to beat, so if I keep going I'd look at softer spots instead of trying to out-predict the closing spread — totals (over/under), which I already have the data for, or specific situational angles.
 
 ---
 
-## Current Status
+## Status
 
 - [x] Data collection — NBA boxscores (2013–2025)
 - [x] Elo rating system with season regression
-- [x] Four-factor rolling feature engineering (10 and 20 game windows)
+- [x] Four-factor rolling features (10 and 20 game windows)
 - [x] Market (Layer 1) calibration and bias analysis
-- [x] Full dataset joined and ready for modeling
-- [x] Layer 2 model training (logistic regression + gradient boosting ensemble)
-- [x] Edge detection — model vs market divergence, bucketed by edge size
-- [x] Backtesting framework — flat-stake ROI at real moneyline prices
-- [x] Expanded odds coverage — point spread joined for 2023-25 (~4,900 OOS games)
-- [x] Bootstrap significance testing — 95% CIs on every strategy's ROI
+- [x] Full dataset joined for modeling
+- [x] Layer 2 model (logistic regression + gradient boosting ensemble)
+- [x] Moneyline edge detection and flat-stake backtest
+- [x] Expanded coverage — point spread joined for 2023-25 (~4,900 OOS games)
+- [x] Bootstrap significance testing — 95% CIs on every strategy
 - [x] Against-the-spread backtest at −110 across the full out-of-sample window
-- [x] Closing-line-value analysis — forecast-encompassing regression
-- [x] **Conclusion: sides market is efficient wrt these signals; no supported edge**
-- [ ] Next: hunt in softer markets (totals / over-under, situational spots)
+- [x] Closing-line-value / forecast-encompassing analysis
+- [x] Conclusion: the sides market is efficient for these signals, no bettable edge
+- [ ] Next: look at softer markets (totals, situational spots)
 
 ---
 
-## Repo Structure
+## Repo structure
 
 ```
 ├── fetch_boxscores.py      # Pull team stats from NBA API
