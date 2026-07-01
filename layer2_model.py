@@ -30,7 +30,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import brier_score_loss, log_loss, accuracy_score, roc_auc_score
 
-MODEL_DATA  = "data/processed/model_data.csv"
+MODEL_DATA  = "data/processed/model_data_spread.csv"
 PRED_PATH   = "data/processed/layer2_predictions.csv"
 PLOT_PATH   = "data/processed/layer2_calibration.png"
 
@@ -38,7 +38,10 @@ TRAIN_SEASONS = [
     "2013-14", "2014-15", "2015-16", "2016-17",
     "2017-18", "2018-19", "2019-20", "2020-21",
 ]
-TEST_SEASONS = ["2021-22", "2022-23"]
+# The moneyline dies after 2022-23, but the point spread covers every season, so
+# the out-of-sample window now runs through 2024-25. All test seasons are still
+# strictly post-training, so nothing the model sees leaks into evaluation.
+TEST_SEASONS = ["2021-22", "2022-23", "2023-24", "2024-25"]
 
 # Four-factor metrics that exist as home_<m>_roll{10,20} / away_<m>_roll{10,20}
 ROLL_METRICS = [
@@ -123,11 +126,26 @@ def main() -> None:
     p_elo    = df.loc[test_mask, "p_elo_home"].values
     p_market = df.loc[test_mask, "p_true_home"].values
 
+    # Spread-implied market probability: a single-feature logistic mapping the
+    # signed home spread to P(home win), fit on TRAIN only (no leakage). This is
+    # the market baseline that reaches the seasons the moneyline can't. A handful
+    # of games have no spread match -> fit on finite rows, leave the rest NaN.
+    spread_train = df.loc[train_mask, "home_spread"].values
+    spread_test  = df.loc[test_mask,  "home_spread"].values
+    fit_ok = np.isfinite(spread_train)
+    spread_lr = LogisticRegression().fit(
+        spread_train[fit_ok].reshape(-1, 1), y_train[fit_ok]
+    )
+    p_spread = np.full(len(spread_test), np.nan)
+    sp_ok = np.isfinite(spread_test)
+    p_spread[sp_ok] = spread_lr.predict_proba(spread_test[sp_ok].reshape(-1, 1))[:, 1]
+
     results = [
         evaluate("Logistic Regression", p_logit, y_test),
         evaluate("Gradient Boosting",   p_gbm,   y_test),
         evaluate("Ensemble (avg)",      p_ens,   y_test),
         evaluate("Elo baseline",        p_elo,   y_test),
+        evaluate("Market (spread)",     p_spread[sp_ok], y_test[sp_ok]),
     ]
 
     # Market baseline only on rows where a moneyline exists.
@@ -145,13 +163,15 @@ def main() -> None:
     # ── Save predictions for the backtester ─────────────────────────────────────
     out = df.loc[test_mask, [
         "date", "season_y", "home_team", "away_team",
-        "moneyline_home", "moneyline_away", "home_won",
+        "score_home", "score_away",
+        "moneyline_home", "moneyline_away", "home_spread", "home_won",
     ]].copy()
-    out["p_model"]  = p_ens
-    out["p_logit"]  = p_logit
-    out["p_gbm"]    = p_gbm
-    out["p_elo"]    = p_elo
-    out["p_market"] = p_market
+    out["p_model"]         = p_ens
+    out["p_logit"]         = p_logit
+    out["p_gbm"]           = p_gbm
+    out["p_elo"]           = p_elo
+    out["p_market"]        = p_market      # de-vigged moneyline (2021-23 only)
+    out["p_market_spread"] = p_spread      # spread-implied (all test seasons)
     out.to_csv(PRED_PATH, index=False)
     print(f"\nSaved test-set predictions -> {PRED_PATH}  ({len(out):,} rows)")
 
